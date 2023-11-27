@@ -3,7 +3,8 @@ from collections import deque
 import random
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
+import numpy as np
+from torch.utils.tensorboard import SummaryWriter
 
 
 # this function takes as input an observation and returns the grayscale cropped version 
@@ -30,6 +31,42 @@ class Replay_Buffer():
     def get_batch(self):
         batch = random.sample(self.buffer, k=self.batch_size)
         return batch
+    
+
+# this takes as input a batch (list) of tuples (s, a, r, s', done) and returns them in a format to train on
+def preprocess_batch(batch, bs, n, h, w, device):
+
+    # create one array for the states and new states
+    states = np.empty((bs, n, h, w))
+    new_states = np.empty((bs, n, h, w))
+    actions = np.empty((bs))
+    rewards = np.empty((bs))
+    dones = np.empty((bs))
+
+    for i in range(bs):
+        # batch[i] is a tuple; [0] then is the state
+        states[i, :, :, :] = batch[i][0]
+        new_states[i, :, :, :] = batch[i][3]
+        actions[i] = batch[i][1]
+        rewards[i] = batch[i][2]
+        dones[i] = batch[i][4]
+
+    states /= 255.
+    new_states /= 255.
+
+    states = torch.Tensor(states).type(torch.float32)
+    new_states = torch.Tensor(new_states).type(torch.float32)
+    actions = torch.Tensor(actions).type(torch.float32)
+    rewards = torch.Tensor(rewards).type(torch.float32)
+    dones = torch.Tensor(dones).type(torch.float32)
+
+    states = states.to(device)
+    new_states = new_states.to(device)
+    actions = actions.to(device)
+    rewards = rewards.to(device)
+    dones = dones.to(device)
+
+    return states, actions, rewards, new_states, dones
 
 
 class CNN(nn.Module):
@@ -75,7 +112,7 @@ class CNN(nn.Module):
 
         return x
 
-class Net(pl.LightningModule):
+class Net(nn.Module):
     def __init__(self, num_images, img_width, img_height, num_actions):
         super().__init__()
         self.cnn = CNN(num_images=num_images)
@@ -91,6 +128,28 @@ class Net(pl.LightningModule):
         x = self.fc_1(x)
 
         return x
+
+
+class Logger():
+    def __init__(self, folder, log_every):
+        self.writer = SummaryWriter(folder)
+        self.log_every = log_every
+        self.episode_rewards = []
+
+    def add_episode_reward(self, episode_reward):
+        self.episode_rewards.append(episode_reward)
+
+    def log_metrics(self, current_episode):
+
+        # log the average reward, the min and the max
+        current_rewards = np.array(self.episode_rewards[-self.log_every:])
+        avg_reward = current_rewards.mean()
+        min_reward = current_rewards.min()
+        max_reward = current_rewards.max()
+
+        self.writer.add_scalar('Avg_Reward', avg_reward, current_episode)
+        self.writer.add_scalar('Min_Reward', min_reward, current_episode)
+        self.writer.add_scalar('Max_Reward', max_reward, current_episode)
+
+        print(f'Episode: {current_episode} - Avg_Reward: {avg_reward}; Min_reward: {min_reward}; Max_reward: {max_reward}')
     
-    def training_step(self, batch, batch_idx):
-        pass
